@@ -200,21 +200,24 @@ class YOLOv3Head(object):
             pool_stride=1,
             pool_padding=2,
             ceil_mode=False,
-            pool_type='max')
+            pool_type='max',
+            use_cudnn=False)
         output3 = fluid.layers.pool2d(
             input=output1,
             pool_size=9,
             pool_stride=1,
             pool_padding=4,
             ceil_mode=False,
-            pool_type='max')
+            pool_type='max',
+            use_cudnn=False)
         output4 = fluid.layers.pool2d(
             input=output1,
             pool_size=13,
             pool_stride=1,
             pool_padding=6,
             ceil_mode=False,
-            pool_type='max')
+            pool_type='max',
+            use_cudnn=False)
         output = fluid.layers.concat(
             input=[output1, output2, output3, output4], axis=1)
         return output
@@ -397,7 +400,6 @@ class YOLOv3Head(object):
 
         """
         outputs = self._get_outputs(input, is_train=True)
-
         return self.yolo_loss(outputs, gt_box, gt_label, gt_score, targets,
                               self.anchors, self.anchor_masks,
                               self.mask_anchors, self.num_classes,
@@ -511,7 +513,7 @@ class YOLOv4Head(YOLOv3Head):
 
     def max_pool(self, input, size):
         pad = [(size - 1) // 2] * 2
-        return fluid.layers.pool2d(input, size, 'max', pool_padding=pad)
+        return fluid.layers.pool2d(input, size, 'max', pool_padding=pad, use_cudnn=False)
 
     def spp(self, input):
         branch_a = self.max_pool(input, 13)

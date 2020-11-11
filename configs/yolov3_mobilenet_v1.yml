@@ -9,6 +9,14 @@ pretrain_weights: http://paddle-imagenet-models-name.bj.bcebos.com/MobileNetV1_p
 weights: output/yolov3_mobilenet_v1/model_final
 num_classes: 80
 use_fine_grained_loss: false
+scale_loss: 128
+use_dynamic_loss_scaling: True
+data_format: NHWC
+use_fp16: false
+fuse_bn_act_ops: true
+fuse_elewise_add_act_ops: true
+enable_addto: true
+fuse_bn_add_act_ops: true
 
 YOLOv3:
   backbone: MobileNet

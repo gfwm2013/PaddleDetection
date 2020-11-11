@@ -49,16 +49,21 @@ class YOLOv3(object):
         self.yolo_head = yolo_head
         self.use_fine_grained_loss = use_fine_grained_loss
 
-    def build(self, feed_vars, mode='train', exclude_nms=False):
+    def build(self, feed_vars, mode='train', exclude_nms=False, data_format="NCHW"):
         im = feed_vars['image']
 
         mixed_precision_enabled = mixed_precision_global_state() is not None
 
+        if data_format == 'NHWC':
+            im = fluid.layers.transpose(im, [0, 2, 3, 1])
+
         # cast inputs to FP16
         if mixed_precision_enabled:
-            im = fluid.layers.cast(im, 'float16')
+           im = fluid.layers.cast(im, 'float16')
 
-        body_feats = self.backbone(im)
+        body_feats = self.backbone(im, data_format=data_format)
+
+        body_feats = [fluid.layers.transpose(var, [0, 3, 1, 2]) for var in body_feats] if data_format == 'NHWC' else body_feats
 
         if isinstance(body_feats, OrderedDict):
             body_feat_names = list(body_feats.keys())
@@ -66,7 +71,7 @@ class YOLOv3(object):
 
         # cast features back to FP32
         if mixed_precision_enabled:
-            body_feats = [fluid.layers.cast(v, 'float32') for v in body_feats]
+           body_feats = [fluid.layers.cast(v, 'float32') for v in body_feats]
 
         if mode == 'train':
             gt_bbox = feed_vars['gt_bbox']
@@ -155,8 +160,8 @@ class YOLOv3(object):
             iterable=iterable) if use_dataloader else None
         return feed_vars, loader
 
-    def train(self, feed_vars):
-        return self.build(feed_vars, mode='train')
+    def train(self, feed_vars, data_format="NCHW"):
+        return self.build(feed_vars, mode='train', data_format=data_format)
 
     def eval(self, feed_vars):
         return self.build(feed_vars, mode='test')

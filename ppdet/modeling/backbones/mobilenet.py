@@ -69,7 +69,8 @@ class MobileNet(object):
                    num_groups=1,
                    act='relu',
                    use_cudnn=True,
-                   name=None):
+                   name=None,
+                   data_format="NCHW"):
         parameter_attr = ParamAttr(
             learning_rate=self.conv_learning_rate,
             initializer=fluid.initializer.MSRA(),
@@ -85,7 +86,8 @@ class MobileNet(object):
             act=None,
             use_cudnn=use_cudnn,
             param_attr=parameter_attr,
-            bias_attr=False)
+            bias_attr=False,
+            data_format=data_format)
 
         bn_name = name + "_bn"
         norm_decay = self.norm_decay
@@ -99,7 +101,8 @@ class MobileNet(object):
             param_attr=bn_param_attr,
             bias_attr=bn_bias_attr,
             moving_mean_name=bn_name + '_mean',
-            moving_variance_name=bn_name + '_variance')
+            moving_variance_name=bn_name + '_variance',
+            data_layout=data_format)
 
     def depthwise_separable(self,
                             input,
@@ -108,6 +111,7 @@ class MobileNet(object):
                             num_groups,
                             stride,
                             scale,
+                            data_format,
                             name=None):
         mixed_precision_enabled = mixed_precision_global_state() is not None
         depthwise_conv = self._conv_norm(
@@ -118,7 +122,8 @@ class MobileNet(object):
             padding=1,
             num_groups=int(num_groups * scale),
             use_cudnn=mixed_precision_enabled,
-            name=name + "_dw")
+            name=name + "_dw",
+            data_format=data_format)
 
         pointwise_conv = self._conv_norm(
             input=depthwise_conv,
@@ -126,7 +131,8 @@ class MobileNet(object):
             num_filters=int(num_filters2 * scale),
             stride=1,
             padding=0,
-            name=name + "_sep")
+            name=name + "_sep",
+            data_format=data_format)
         return pointwise_conv
 
     def _extra_block(self,
@@ -135,6 +141,7 @@ class MobileNet(object):
                      num_filters2,
                      num_groups,
                      stride,
+                     data_format,
                      name=None):
         pointwise_conv = self._conv_norm(
             input=input,
@@ -144,7 +151,8 @@ class MobileNet(object):
             num_groups=int(num_groups),
             padding=0,
             act='relu6',
-            name=name + "_extra1")
+            name=name + "_extra1",
+            data_format=data_format)
         normal_conv = self._conv_norm(
             input=pointwise_conv,
             filter_size=3,
@@ -153,32 +161,33 @@ class MobileNet(object):
             num_groups=int(num_groups),
             padding=1,
             act='relu6',
-            name=name + "_extra2")
+            name=name + "_extra2",
+            data_format=data_format)
         return normal_conv
 
-    def __call__(self, input):
+    def __call__(self, input, data_format):
         scale = self.conv_group_scale
 
         blocks = []
         # input 1/1
         out = self._conv_norm(
-            input, 3, int(32 * scale), 2, 1, name=self.prefix_name + "conv1")
+            input, 3, int(32 * scale), 2, 1, name=self.prefix_name + "conv1", data_format=data_format)
         # 1/2
         out = self.depthwise_separable(
-            out, 32, 64, 32, 1, scale, name=self.prefix_name + "conv2_1")
+            out, 32, 64, 32, 1, scale, name=self.prefix_name + "conv2_1", data_format=data_format)
         out = self.depthwise_separable(
-            out, 64, 128, 64, 2, scale, name=self.prefix_name + "conv2_2")
+            out, 64, 128, 64, 2, scale, name=self.prefix_name + "conv2_2", data_format=data_format)
         # 1/4
         out = self.depthwise_separable(
-            out, 128, 128, 128, 1, scale, name=self.prefix_name + "conv3_1")
+            out, 128, 128, 128, 1, scale, name=self.prefix_name + "conv3_1", data_format=data_format)
         out = self.depthwise_separable(
-            out, 128, 256, 128, 2, scale, name=self.prefix_name + "conv3_2")
+            out, 128, 256, 128, 2, scale, name=self.prefix_name + "conv3_2", data_format=data_format)
         # 1/8
         blocks.append(out)
         out = self.depthwise_separable(
-            out, 256, 256, 256, 1, scale, name=self.prefix_name + "conv4_1")
+            out, 256, 256, 256, 1, scale, name=self.prefix_name + "conv4_1", data_format=data_format)
         out = self.depthwise_separable(
-            out, 256, 512, 256, 2, scale, name=self.prefix_name + "conv4_2")
+            out, 256, 512, 256, 2, scale, name=self.prefix_name + "conv4_2", data_format=data_format)
         # 1/16
         blocks.append(out)
         for i in range(5):
@@ -189,14 +198,15 @@ class MobileNet(object):
                 512,
                 1,
                 scale,
-                name=self.prefix_name + "conv5_" + str(i + 1))
+                name=self.prefix_name + "conv5_" + str(i + 1),
+                data_format=data_format)
         module11 = out
 
         out = self.depthwise_separable(
-            out, 512, 1024, 512, 2, scale, name=self.prefix_name + "conv5_6")
+            out, 512, 1024, 512, 2, scale, name=self.prefix_name + "conv5_6", data_format=data_format)
         # 1/32
         out = self.depthwise_separable(
-            out, 1024, 1024, 1024, 1, scale, name=self.prefix_name + "conv6")
+            out, 1024, 1024, 1024, 1, scale, name=self.prefix_name + "conv6", data_format=data_format)
         module13 = out
         blocks.append(out)
         if not self.with_extra_blocks:
@@ -205,14 +215,18 @@ class MobileNet(object):
         num_filters = self.extra_block_filters
         module14 = self._extra_block(module13, num_filters[0][0],
                                      num_filters[0][1], 1, 2,
-                                     self.prefix_name + "conv7_1")
+                                     self.prefix_name + "conv7_1",
+                                     data_format=data_format)
         module15 = self._extra_block(module14, num_filters[1][0],
                                      num_filters[1][1], 1, 2,
-                                     self.prefix_name + "conv7_2")
+                                     self.prefix_name + "conv7_2",
+                                     data_format=data_format)
         module16 = self._extra_block(module15, num_filters[2][0],
                                      num_filters[2][1], 1, 2,
-                                     self.prefix_name + "conv7_3")
+                                     self.prefix_name + "conv7_3",
+                                     data_format=data_format)
         module17 = self._extra_block(module16, num_filters[3][0],
                                      num_filters[3][1], 1, 2,
-                                     self.prefix_name + "conv7_4")
+                                     self.prefix_name + "conv7_4",
+                                     data_format=data_format)
         return module11, module13, module14, module15, module16, module17

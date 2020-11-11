@@ -30,6 +30,7 @@ import six
 from collections import deque
 from paddle.fluid import profiler
 
+import paddle
 from paddle import fluid
 from paddle.fluid.layers.learning_rate_scheduler import _decay_step_counter
 from paddle.fluid.optimizer import ExponentialMovingAverage
@@ -50,6 +51,7 @@ FORMAT = '%(asctime)s-%(levelname)s: %(message)s'
 logging.basicConfig(level=logging.INFO, format=FORMAT)
 logger = logging.getLogger(__name__)
 
+paddle.enable_static()
 
 def main():
     env = os.environ
@@ -114,16 +116,34 @@ def main():
             with mixed_precision_context(FLAGS.loss_scale, FLAGS.fp16) as ctx:
                 inputs_def = cfg['TrainReader']['inputs_def']
                 feed_vars, train_loader = model.build_inputs(**inputs_def)
-                train_fetches = model.train(feed_vars)
+                train_fetches = model.train(feed_vars, data_format=cfg.data_format)
                 loss = train_fetches['loss']
                 if FLAGS.fp16:
                     loss *= ctx.get_loss_scale_var()
                 lr = lr_builder()
                 optimizer = optim_builder(lr)
+                if cfg.use_fp16:
+                    optimizer = fluid.contrib.mixed_precision.decorate(
+                        optimizer,
+                        init_loss_scaling=cfg.scale_loss,
+                        use_dynamic_loss_scaling=cfg.use_dynamic_loss_scaling)
                 optimizer.minimize(loss)
 
-                if FLAGS.fp16:
-                    loss /= ctx.get_loss_scale_var()
+            # inputs_def = cfg['TrainReader']['inputs_def']
+            # feed_vars, train_loader = model.build_inputs(**inputs_def)
+            # train_fetches = model.train(feed_vars, data_format=cfg.data_format)
+            # loss = train_fetches['loss']
+            # lr = lr_builder()
+            # optimizer = optim_builder(lr)
+            # if cfg.use_fp16:
+            #     optimizer = fluid.contrib.mixed_precision.decorate(
+            #         optimizer,
+            #         init_loss_scaling=cfg.scale_loss,
+            #         use_dynamic_loss_scaling=cfg.use_dynamic_loss_scaling)
+            # optimizer.minimize(loss)
+
+                # if FLAGS.fp16:
+                #     loss /= ctx.get_loss_scale_var()
 
             if 'use_ema' in cfg and cfg['use_ema']:
                 global_steps = _decay_step_counter()
@@ -162,6 +182,11 @@ def main():
     # compile program for multi-devices
     build_strategy = fluid.BuildStrategy()
     build_strategy.fuse_all_optimizer_ops = False
+    build_strategy.fuse_elewise_add_act_ops = cfg.fuse_elewise_add_act_ops
+    build_strategy.fuse_bn_act_ops = cfg.fuse_bn_act_ops
+    build_strategy.enable_addto = cfg.enable_addto    
+    build_strategy.fuse_bn_add_act_ops = cfg.fuse_bn_add_act_ops
+
     # only enable sync_bn in multi GPU devices
     sync_bn = getattr(model.backbone, 'norm_type', None) == 'sync_bn'
     build_strategy.sync_batch_norm = sync_bn and devices_num > 1 \
@@ -225,6 +250,7 @@ def main():
     cfg_name = os.path.basename(FLAGS.config).split('.')[0]
     save_dir = os.path.join(cfg.save_dir, cfg_name)
     time_stat = deque(maxlen=cfg.log_smooth_window)
+    iter_time_cost = []
     best_box_ap_list = [0.0, 0]  #[map, iter]
 
     # use VisualDL to log data
@@ -239,12 +265,18 @@ def main():
         start_time = end_time
         end_time = time.time()
         time_stat.append(end_time - start_time)
+        iter_time_cost.append(end_time - start_time)
         time_cost = np.mean(time_stat)
         eta_sec = (cfg.max_iters - it) * time_cost
         eta = str(datetime.timedelta(seconds=int(eta_sec)))
         outs = exe.run(compiled_train_prog, fetch_list=train_values)
         stats = {k: np.array(v).mean() for k, v in zip(train_keys, outs[:-1])}
-
+        if it == 200:
+            time_avg = sum(iter_time_cost[-150:]) / 150
+            ips = 8 / time_avg
+            str1 = 'In 200 iters, the mean ips is : {:.5f}'.format(ips)
+            logger.info(str1)
+            return
         # use vdl-paddle to log loss
         if FLAGS.use_vdl:
             if it % cfg.log_iter == 0:
